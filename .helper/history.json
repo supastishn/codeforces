@@ -1,0 +1,17 @@
+{
+    "active_problem_id": "codeforces/2763A.cpp",
+    "problems": {
+        "codeforces/123A.cpp": {
+            "platform": "codeforces",
+            "name": "123A.cpp",
+            "filepath": "codeforces/123A.cpp",
+            "tests": []
+        },
+        "codeforces/2763A.cpp": {
+            "platform": "codeforces",
+            "name": "2763A.cpp",
+            "filepath": "codeforces/2763A.cpp",
+            "tests": []
+        }
+    }
+}

@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+import os
+import sys
+import json
+import shutil
+import subprocess
+import time
+try:
+    import resource
+except ImportError:
+    resource = None
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+CYAN = "\033[96m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+HELPER_DIR = ".helper"
+INCLUDE_DIR = os.path.join(HELPER_DIR, "include")
+BITS_DIR = os.path.join(INCLUDE_DIR, "bits")
+STDCPP_H = os.path.join(BITS_DIR, "stdc++.h")
+BUILD_DIR = os.path.join(HELPER_DIR, "build")
+HISTORY_FILE = os.path.join(HELPER_DIR, "history.json")
+STDC_CONTENT = """#ifndef STDCXX_H
+#define STDCXX_H
+#include <cassert>
+#include <cctype>
+#include <cerrno>
+#include <cfloat>
+#include <ciso646>
+#include <climits>
+#include <clocale>
+#include <cmath>
+#include <csetjmp>
+#include <csignal>
+#include <cstdarg>
+#include <cstddef>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <ctime>
+#include <cwchar>
+#include <cwctype>
+#include <algorithm>
+#include <bitset>
+#include <complex>
+#include <deque>
+#include <exception>
+#include <fstream>
+#include <functional>
+#include <iomanip>
+#include <ios>
+#include <iosfwd>
+#include <iostream>
+#include <istream>
+#include <iterator>
+#include <limits>
+#include <list>
+#include <locale>
+#include <map>
+#include <memory>
+#include <new>
+#include <numeric>
+#include <ostream>
+#include <queue>
+#include <set>
+#include <sstream>
+#include <stack>
+#include <stdexcept>
+#include <streambuf>
+#include <string>
+#include <typeinfo>
+#include <utility>
+#include <valarray>
+#include <vector>
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <forward_list>
+#include <future>
+#include <initializer_list>
+#include <mutex>
+#include <random>
+#include <ratio>
+#include <regex>
+#include <scoped_allocator>
+#include <system_error>
+#include <thread>
+#include <tuple>
+#include <typeindex>
+#include <type_traits>
+#include <unordered_map>
+#include <unordered_set>
+#include <shared_mutex>
+#include <any>
+#include <optional>
+#include <variant>
+#include <string_view>
+#include <filesystem>
+#endif
+"""
+def initialize_helper():
+    if not os.path.exists(HELPER_DIR):
+        os.makedirs(HELPER_DIR)
+    if not os.path.exists(BITS_DIR):
+        os.makedirs(BITS_DIR)
+    if not os.path.exists(STDCPP_H):
+        with open(STDCPP_H, "w") as f:
+            f.write(STDC_CONTENT)
+    if not os.path.exists(BUILD_DIR):
+        os.makedirs(BUILD_DIR)
+    if not os.path.exists(HISTORY_FILE):
+        with open(HISTORY_FILE, "w") as f:
+            json.dump({"active_problem_id": None, "problems": {}}, f, indent=4)
+def load_history():
+    initialize_helper()
+    with open(HISTORY_FILE, "r") as f:
+        return json.load(f)
+def save_history(history):
+    with open(HISTORY_FILE, "w") as f:
+        json.dump(history, f, indent=4)
+def get_active_problem(history):
+    pid = history.get("active_problem_id")
+    if pid and pid in history["problems"]:
+        return history["problems"][pid]
+    return None
+def find_compiler():
+    for comp in ["g++", "clang++"]:
+        if shutil.which(comp):
+            return comp
+    return None
+def set_limits():
+    if resource is not None:
+        try:
+            mem_limit = 256 * 1024 * 1024
+            resource.setrlimit(resource.RLIMIT_AS, (mem_limit, mem_limit))
+            resource.setrlimit(resource.RLIMIT_STACK, (mem_limit, mem_limit))
+        except Exception:
+            pass
+def prompt_with_escape(prompt_text):
+    try:
+        val = input(prompt_text).strip()
+        if val.startswith('\x1b') or val.lower() in ['esc', 'q', 'exit']:
+            print(f"\n{YELLOW}Aborted / Returned.{RESET}")
+            return None
+        return val
+    except (EOFError, KeyboardInterrupt):
+        print(f"\n{YELLOW}Aborted / Returned.{RESET}")
+        return None
+def read_multiline(prompt):
+    print(prompt)
+    print(f"{YELLOW}(Paste input and press Ctrl+D or type 'EOF' on a new line to finish, or type 'esc' to cancel){RESET}")
+    lines = []
+    try:
+        while True:
+            line = input()
+            if line.strip().lower() == 'esc' or line.startswith('\x1b'):
+                return None
+            if line.strip() == "EOF":
+                break
+            lines.append(line)
+    except (EOFError, KeyboardInterrupt):
+        return None
+    return "\n".join(lines)
+def select_or_create_problem(history):
+    print(f"\n{BOLD}--- Platforms ---{RESET}")
+    platforms = ["codeforces", "usaco", "atcoder", "IOI", "miscellaneous"]
+    for i, plat in enumerate(platforms, 1):
+        print(f"[{i}] {plat}")
+    choice = prompt_with_escape(f"Select platform [1-{len(platforms)}] (or esc): ")
+    if choice is None:
+        return
+    try:
+        plat_idx = int(choice) - 1
+        if plat_idx < 0 or plat_idx >= len(platforms):
+            print(f"{RED}Invalid selection.{RESET}")
+            return
+        platform = platforms[plat_idx]
+    except ValueError:
+        print(f"{RED}Invalid selection.{RESET}")
+        return
+    name = prompt_with_escape("Enter problem/filename (e.g., 123A or A) (or esc): ")
+    if name is None:
+        return
+    name = name.strip()
+    if not name:
+        print(f"{RED}Filename cannot be empty.{RESET}")
+        return
+    if not name.endswith(".cpp"):
+        name += ".cpp"
+    os.makedirs(platform, exist_ok=True)
+    filepath = os.path.join(platform, name)
+    problem_id = f"{platform}/{name}"
+    if not os.path.exists(filepath):
+        template_path = "templates/TEMPLATE.cpp"
+        if os.path.exists(template_path):
+            shutil.copy(template_path, filepath)
+            print(f"{GREEN}Created new file {filepath} from templates/TEMPLATE.cpp{RESET}")
+        else:
+            fallback = """#include <bits/stdc++.h>
+using namespace std;
+int main() {
+    ios_base::sync_with_stdio(false);
+    cin.tie(NULL);
+    return 0;
+}
+"""
+            with open(filepath, "w") as f:
+                f.write(fallback)
+            print(f"{GREEN}Created standard template at {filepath}{RESET}")
+    if problem_id not in history["problems"]:
+        history["problems"][problem_id] = {
+            "platform": platform,
+            "name": name,
+            "filepath": filepath,
+            "tests": []
+        }
+    history["active_problem_id"] = problem_id
+    save_history(history)
+    print(f"{GREEN}Switched active problem to {problem_id}{RESET}")
+def load_past_problem(history):
+    problems = list(history["problems"].items())
+    if not problems:
+        print(f"{YELLOW}No problems found in history.{RESET}")
+        return
+    print(f"\n{BOLD}--- Past Problems ---{RESET}")
+    for i, (pid, pdata) in enumerate(problems, 1):
+        print(f"[{i}] [{pdata['platform'].upper()}] {pdata['name']} (Path: {pdata['filepath']})")
+    choice = prompt_with_escape(f"Select problem to load [1-{len(problems)}] (or esc): ")
+    if choice is None:
+        return
+    try:
+        idx = int(choice) - 1
+        if idx < 0 or idx >= len(problems):
+            print(f"{RED}Invalid selection.{RESET}")
+            return
+        selected_id = problems[idx][0]
+        history["active_problem_id"] = selected_id
+        save_history(history)
+        print(f"{GREEN}Loaded problem {selected_id}{RESET}")
+    except ValueError:
+        print(f"{RED}Invalid selection.{RESET}")
+def add_sample_test(history):
+    active = get_active_problem(history)
+    if not active:
+        print(f"{RED}No active problem. Please load or create one first.{RESET}")
+        return
+    choice = prompt_with_escape("How many sample test cases do you want to add? (or esc): ")
+    if choice is None:
+        return
+    try:
+        count = int(choice)
+    except ValueError:
+        print(f"{RED}Invalid number.{RESET}")
+        return
+    for i in range(1, count + 1):
+        print(f"\n{BOLD}--- Adding Case {i} ---{RESET}")
+        test_in = read_multiline("Enter/Paste Input:")
+        if test_in is None:
+            print(f"{YELLOW}Cancelled adding test cases.{RESET}")
+            return
+        test_out = read_multiline("Enter/Paste Expected Output:")
+        if test_out is None:
+            print(f"{YELLOW}Cancelled adding test cases.{RESET}")
+            return
+        active["tests"].append({
+            "input": test_in,
+            "output": test_out
+        })
+    save_history(history)
+    print(f"{GREEN}Successfully added {count} test case(s).{RESET}")
+def view_sample_tests(history):
+    active = get_active_problem(history)
+    if not active:
+        print(f"{RED}No active problem.{RESET}")
+        return
+    tests = active.get("tests", [])
+    if not tests:
+        print(f"{YELLOW}No test cases registered for this problem.{RESET}")
+        return
+    for i, test in enumerate(tests, 1):
+        print(f"\n{CYAN}--- Test Case {i} ---{RESET}")
+        print(f"{BOLD}Input:{RESET}")
+        print(test["input"])
+        print(f"{BOLD}Expected Output:{RESET}")
+        print(test["output"])
+def normalize(text):
+    lines = [line.strip() for line in text.strip().splitlines()]
+    return [line for line in lines if line]
+def open_in_editor(history):
+    active = get_active_problem(history)
+    if not active:
+        print(f"{RED}No active problem.{RESET}")
+        return
+    editor = os.environ.get("EDITOR", "nvim")
+    if not shutil.which(editor):
+        if shutil.which("nano"):
+            editor = "nano"
+        elif shutil.which("vi"):
+            editor = "vi"
+        else:
+            print(f"{RED}No text editor ({editor}) found in PATH.{RESET}")
+            return
+    print(f"{CYAN}Opening {active['filepath']} with {editor}...{RESET}")
+    try:
+        subprocess.run([editor, active["filepath"]])
+    except Exception as e:
+        print(f"{RED}Failed to open editor: {e}{RESET}")
+def run_tests(history):
+    active = get_active_problem(history)
+    if not active:
+        print(f"{RED}No active problem.{RESET}")
+        return
+    filepath = active["filepath"]
+    if not os.path.exists(filepath):
+        print(f"{RED}Source file not found at {filepath}{RESET}")
+        return
+    tests = active.get("tests", [])
+    if not tests:
+        print(f"{YELLOW}No test cases to run. Please add test cases first.{RESET}")
+        return
+    compiler = find_compiler()
+    if not compiler:
+        print(f"{RED}No C++ compiler found (g++ or clang++). Please install a compiler.{RESET}")
+        return
+    exe_path = os.path.join(BUILD_DIR, "active_bin")
+    if os.path.exists(exe_path):
+        os.remove(exe_path)
+    print(f"{CYAN}Compiling {filepath} using {compiler}...{RESET}")
+    cmd = [
+        compiler,
+        "-O3",
+        "-std=c++17",
+        "-D_GLIBCXX_DEBUG",
+        "-ftrapv",
+        f"-I{INCLUDE_DIR}",
+        filepath,
+        "-o",
+        exe_path
+    ]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"\n{RED}Verdict: Compile Error{RESET}")
+        print(f"{BOLD}Compiler Output:{RESET}")
+        print(res.stderr)
+        return
+    print(f"{GREEN}Compilation successful!{RESET}\n")
+    for i, test in enumerate(tests, 1):
+        print(f"{BOLD}=== Running Test Case {i} ==={RESET}")
+        test_in = test["input"]
+        expected_out = test["output"]
+        start_time = time.time()
+        try:
+            run_res = subprocess.run(
+                [exe_path],
+                input=test_in,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+                preexec_fn=set_limits
+            )
+            elapsed = time.time() - start_time
+            if run_res.returncode != 0:
+                sig = run_res.returncode
+                stderr_output = run_res.stderr or ""
+                is_mle = False
+                if sig in [-9, -11] or "bad_alloc" in stderr_output.lower():
+                    is_mle = True
+                is_overflow = False
+                if "overflow" in stderr_output.lower() or "runtime error" in stderr_output.lower():
+                    is_overflow = True
+                if sig == -6 and not is_mle:
+                    if "assertion" in stderr_output.lower() or "debug" in stderr_output.lower():
+                        is_overflow = False
+                    else:
+                        is_overflow = True
+                if is_mle:
+                    print(f"Verdict: {RED}Memory Limit Exceeded (Limit: 256MB){RESET}")
+                elif is_overflow:
+                    print(f"Verdict: {RED}Overflow Detected{RESET}")
+                else:
+                    print(f"Verdict: {RED}Runtime Error Detected (Exit code: {run_res.returncode}){RESET}")
+                if stderr_output:
+                    print(f"{BOLD}Stderr Output:{RESET}\n{stderr_output}")
+                print()
+                continue
+            actual_out = run_res.stdout
+            norm_actual = normalize(actual_out)
+            norm_expected = normalize(expected_out)
+            if norm_actual == norm_expected:
+                print(f"Verdict: {GREEN}ACCEPTED (Time: {elapsed:.3f}s){RESET}")
+            else:
+                print(f"Verdict: {RED}WRONG ANSWER (Time: {elapsed:.3f}s){RESET}")
+                print(f"{BOLD}Input:{RESET}")
+                print(test_in)
+                print(f"{BOLD}Expected Output:{RESET}")
+                print(expected_out)
+                print(f"{BOLD}Actual Output:{RESET}")
+                print(actual_out)
+        except subprocess.TimeoutExpired:
+            print(f"Verdict: {RED}Time Limit Exceeded (Limit: 5.0s){RESET}")
+        print()
+def clear_active(history):
+    history["active_problem_id"] = None
+    save_history(history)
+    print(f"{GREEN}Active problem cleared.{RESET}")
+def main():
+    while True:
+        history = load_history()
+        active = get_active_problem(history)
+        print("\n" + "=" * 50)
+        if active:
+            print(f"{BOLD}Active Problem:{RESET} [{active['platform'].upper()}] {active['name']}")
+            print(f"{BOLD}Source Path:{RESET} {active['filepath']}")
+            print(f"{BOLD}Sample Tests:{RESET} {len(active['tests'])} registered")
+        else:
+            print(f"{BOLD}No active problem loaded.{RESET}")
+        print("=" * 50)
+        print("1. Select or Create Problem")
+        print("2. Load Past Problem from History")
+        if active:
+            print("3. Add Sample Test Case(s)")
+            print("4. View Sample Test Cases")
+            print("5. Run Code on Samples")
+            print("6. Open Source File in Editor")
+            print("7. Clear Active Problem")
+        print("0. Exit (or type esc/q)")
+        choice = prompt_with_escape(f"\n{BOLD}Choose option: {RESET}")
+        if choice is None or choice == "0":
+            print("Goodbye!")
+            break
+        if choice == "1":
+            select_or_create_problem(history)
+        elif choice == "2":
+            load_past_problem(history)
+        elif choice == "3" and active:
+            add_sample_test(history)
+        elif choice == "4" and active:
+            view_sample_tests(history)
+        elif choice == "5" and active:
+            run_tests(history)
+        elif choice == "6" and active:
+            open_in_editor(history)
+        elif choice == "7" and active:
+            clear_active(history)
+        else:
+            print(f"{RED}Invalid option.{RESET}")
+if __name__ == "__main__":
+    main()
