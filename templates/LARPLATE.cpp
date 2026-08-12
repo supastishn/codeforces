@@ -122,7 +122,56 @@ namespace stlarp {
         }
         return cum;
     }
-     
+    int interpolationSearch(int low, int high, function<int64_t(int)> func, bool minimize) {
+        if (low >= high) {
+            return low;
+        }
+        auto getGradient = [&](int x) -> int64_t {
+            return func(x + 1) - func(x);
+        };
+        int left = low;
+        int right = high - 1;
+        while (left < right) {
+            int64_t gradientLeft = getGradient(left);
+            int64_t gradientRight = getGradient(right);
+            int position;
+            if ((gradientLeft < 0 && gradientRight > 0) || (gradientLeft > 0 && gradientRight < 0)) {
+                double fraction = -static_cast<double>(gradientLeft) / (gradientRight - gradientLeft);
+                position = left + static_cast<int>(round(fraction * (right - left)));
+                if (position < left) {
+                    position = left;
+                }
+                if (position > right) {
+                    position = right;
+                }
+            } else {
+                position = left + (right - left) / 2;
+            }
+            int64_t gradientMid = getGradient(position);
+            if (gradientMid == 0) {
+                left = position;
+                break;
+            }
+            if (minimize) {
+                if (gradientMid < 0) {
+                    left = position + 1;
+                } else {
+                    right = position - 1;
+                }
+            } else {
+                if (gradientMid > 0) {
+                    left = position + 1;
+                } else {
+                    right = position - 1;
+                }
+            }
+        }
+        if (minimize) {
+            return (func(left) <= func(left + 1)) ? left : left + 1;
+        } else {
+            return (func(left) >= func(left + 1)) ? left : left + 1;
+        }
+    }
     int ternarySearch(int low, int high, function<int64_t(int)> func, bool minimize) {
         int left = low;
         int right = high;
@@ -240,15 +289,9 @@ namespace stlarp {
 };
 using namespace stlarp;
 int main() {
-	int t; cin >> t;
-	while (t--) {
-	
-		int n; cin >> n;
-		vector<int> arr(n);
-		FOR(i, 0, n) {
-			cin >> arr[i];
-		}
-	
+	int a, b, c; cin >> a >> b >> c;
+    debug("Sum =", a + b + c);
+    qd(a+b+c)
 }
 
 /* 
